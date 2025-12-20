@@ -1,0 +1,90 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# Virtual Environment
+venv/
+.env
+
+# =========================
+# FastAPI / Uvicorn
+# =========================
+*.log
+
+# =========================
+# AI / ML Models & Cache
+# =========================
+.cache/
+.cache/**
+.huggingface/
+transformers_cache/
+*.bin
+*.pt
+*.pth
+
+# spaCy models (optional: comment if you want to track them)
+en_core_web_sm/
+
+# =========================
+# Temporary Video / Audio Files
+# =========================
+temp_files/
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.wav
+*.mp3
+*.flac
+*.jpg
+*.png
+
+# =========================
+# OCR / OpenCV Outputs
+# =========================
+frames/
+ocr_output/
+
+# =========================
+# OS Files
+# =========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =========================
+# IDEs & Editors
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+# Jupyter (if used)
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Tests / Coverage
+# =========================
+.pytest_cache/
+.coverage
+htmlcov/
+
+# =========================
+# Node (if frontend added later)
+# =========================
+node_modules/
+
+# =========================
+# Build / Distribution
+# =========================
+build/
+dist/
+*.egg-info/
