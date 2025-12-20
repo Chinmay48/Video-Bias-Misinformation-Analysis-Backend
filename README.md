@@ -118,7 +118,6 @@ MisinformationVideoPart/<br>
 └── .gitignore                       # Git ignore rules<br>
 
 
----
 
 ---
 
@@ -126,8 +125,7 @@ MisinformationVideoPart/<br>
 
 ### 1️⃣ Clone the Repository
 ```bash
-git clone https://github.com/your-username/video-bias-backend.git
-cd video-bias-backend
+git clone https://github.com/Chinmay48/Video-Bias-Misinformation-Analysis-Backend.git
 ```
 ### 2️⃣ Create Virtual Environment
 ```bash
@@ -210,7 +208,7 @@ Click OK → OK → OK
 ```bash
 ⚠️ Important:
 Close PowerShell / CMD / VS Code completely and reopen it.
-
+```
 ### ✅ Step 6: Verify Installation
 
 Open a new terminal and run:
