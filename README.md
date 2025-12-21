@@ -67,6 +67,7 @@ The system accepts a **YouTube link or uploaded video**, extracts all possible t
 ---
 
 ## 📂 Project Folder Structure
+```bash
 MisinformationVideoPart/<br>
 │<br>
 ├── app/<br>
@@ -117,7 +118,7 @@ MisinformationVideoPart/<br>
 ├── README.md                        # Project documentation<br>
 └── .gitignore                       # Git ignore rules<br>
 
-
+```
 
 ---
 
