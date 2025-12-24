@@ -1,47 +1,86 @@
 import cv2
 import os
+import hashlib
 
-def extract_frames(video_path: str, frame_rate: int = 1):
+def _frame_hash(frame, size=16):
     """
-    Extracts frames from video.
-    Default: 1 frame per second.
-    Saves frames in temp_files/frames/
+    Lightweight perceptual hash for duplicate detection
+    """
+    small = cv2.resize(frame, (size, size))
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    return hashlib.md5(gray.tobytes()).hexdigest()
+
+
+def extract_frames(
+    video_path: str,
+    frame_rate: int = 3,        # 1 frame every 3 seconds (OCR-friendly)
+    max_frames: int = 120,
+    resize_width: int = 960     # resize for faster OCR
+):
+    """
+    Optimized frame extraction for OCR.
+
+    - frame_rate: seconds between frames
+    - max_frames: hard safety limit
+    - resize_width: downscale frames for OCR speed
     """
 
-    # Create frame directory if not exists
     frames_dir = "temp_files/frames"
-    if not os.path.exists(frames_dir):
-        os.makedirs(frames_dir)
+    os.makedirs(frames_dir, exist_ok=True)
 
     # Clear old frames
     for file in os.listdir(frames_dir):
         os.remove(os.path.join(frames_dir, file))
 
-    video = cv2.VideoCapture(video_path)
+    cap = cv2.VideoCapture(video_path)
 
-    if not video.isOpened():
-        raise Exception("Failed to open video for frame extraction.")
+    if not cap.isOpened():
+        raise RuntimeError("Failed to open video for frame extraction")
 
-    fps = video.get(cv2.CAP_PROP_FPS)  # actual FPS of video
-    frame_gap = int(fps * frame_rate)  # how many frames to skip
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps <= 0:
+        fps = 25
+
+    frame_step = int(fps * frame_rate)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     frame_paths = []
-    frame_count = 0
-    saved_count = 0
+    seen_hashes = set()
+    saved = 0
+    current_frame = 0
 
-    while True:
-        success, frame = video.read()
+    while current_frame < total_frames and saved < max_frames:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
+        success, frame = cap.read()
         if not success:
             break
 
-        # Save only 1 frame per second
-        if frame_count % frame_gap == 0:
-            frame_file = f"{frames_dir}/frame_{saved_count}.jpg"
-            cv2.imwrite(frame_file, frame)
-            frame_paths.append(frame_file)
-            saved_count += 1
+        # Resize (keep aspect ratio)
+        h, w = frame.shape[:2]
+        if w > resize_width:
+            scale = resize_width / w
+            frame = cv2.resize(frame, (resize_width, int(h * scale)))
 
-        frame_count += 1
+        # Skip duplicate frames
+        hsh = _frame_hash(frame)
+        if hsh in seen_hashes:
+            current_frame += frame_step
+            continue
 
-    video.release()
+        seen_hashes.add(hsh)
+
+        frame_file = f"{frames_dir}/frame_{saved}.jpg"
+        cv2.imwrite(frame_file, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+
+        frame_paths.append(frame_file)
+        saved += 1
+        current_frame += frame_step
+
+    cap.release()
+
+    print(
+        f"🎞️ Frames extracted: {len(frame_paths)} "
+        f"(every {frame_rate}s, max {max_frames})"
+    )
+
     return frame_paths

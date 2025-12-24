@@ -1,28 +1,46 @@
-import easyocr
-import os
+from paddleocr import PaddleOCR
+import time
+import hashlib
 
-# Load EasyOCR reader once (global)
-reader = easyocr.Reader(['en'])
+# Initialize once (angle classifier enabled here)
+ocr = PaddleOCR(use_angle_cls=True, lang='en')
 
-def read_text_from_frames(frame_paths):
-    """
-    Run OCR on all extracted frames.
-    Returns combined OCR text.
-    """
+def frame_hash(path):
+    with open(path, "rb") as f:
+        return hashlib.md5(f.read()).hexdigest()
+
+def read_text_from_frames(frame_paths, skip_every=3):
 
     ocr_results = []
+    seen_hashes = set()
 
-    for frame in frame_paths:
+    frames = frame_paths[::skip_every]
+
+    print(f"\n🔍 OCR STARTED (PaddleOCR)")
+    print(f"📉 Frames reduced: {len(frame_paths)} → {len(frames)}\n")
+
+    start = time.time()
+
+    for idx, frame in enumerate(frames, start=1):
         try:
-            text = reader.readtext(frame, detail=0)  # detail=0 returns plain text
-            if text:
-                # Merge text from this frame
-                combined = " ".join(text)
-                ocr_results.append(combined)
+            h = frame_hash(frame)
+            if h in seen_hashes:
+                continue
+            seen_hashes.add(h)
+
+            result = ocr.ocr(frame)
+
+            if result:
+                for line in result:
+                    text = " ".join([word[1][0] for word in line])
+                    ocr_results.append(text)
+
         except Exception as e:
-            print(f"OCR failed on frame {frame}: {e}")
+            print(f"OCR error on frame {idx}: {e}")
 
-    # Merge all OCR text from all frames
-    ocr_final = "\n".join(ocr_results)
+        if idx % 10 == 0:
+            print(f"📸 OCR progress: {idx}/{len(frames)}")
 
-    return ocr_final
+    print(f"\n✅ OCR DONE in {round(time.time() - start, 2)} sec\n")
+
+    return "\n".join(ocr_results)

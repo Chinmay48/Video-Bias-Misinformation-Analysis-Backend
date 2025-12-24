@@ -1,155 +1,186 @@
-from transformers import pipeline
+import os
+import requests
+from collections import Counter
+from typing import List, Tuple, Any
 
 # =====================================================
-# Lazy-loaded HuggingFace models (SAFE for uvicorn reload)
+# CONFIG
 # =====================================================
 
-_sentiment_model = None
-_emotion_model = None
-_toxicity_model = None
-_political_model = None
-_subjectivity_model = None
+HF_API_TOKEN = os.getenv("HF_API_TOKEN")
 
+if not HF_API_TOKEN:
+    raise RuntimeError("HF_API_TOKEN not set in environment variables")
 
-def get_sentiment_model():
-    global _sentiment_model
-    if _sentiment_model is None:
-        _sentiment_model = pipeline("sentiment-analysis")
-    return _sentiment_model
+HEADERS = {
+    "Authorization": f"Bearer {HF_API_TOKEN}",
+    "Content-Type": "application/json"
+}
 
-
-def get_emotion_model():
-    global _emotion_model
-    if _emotion_model is None:
-        _emotion_model = pipeline(
-            "text-classification",
-            model="bhadresh-savani/distilbert-base-uncased-emotion",
-            top_k=1
-        )
-    return _emotion_model
-
-
-def get_toxicity_model():
-    global _toxicity_model
-    if _toxicity_model is None:
-        _toxicity_model = pipeline(
-            "text-classification",
-            model="unitary/unbiased-toxic-roberta"
-        )
-    return _toxicity_model
-
-
-def get_political_model():
-    global _political_model
-    if _political_model is None:
-        _political_model = pipeline(
-            "zero-shot-classification",
-            model="facebook/bart-large-mnli"
-        )
-    return _political_model
-
-
-def get_subjectivity_model():
-    global _subjectivity_model
-    if _subjectivity_model is None:
-        _subjectivity_model = pipeline(
-            "text-classification",
-            model="julien-c/bert-base-uncased-subjectivity"
-        )
-    return _subjectivity_model
-
+HF_ROUTER_URL = "https://router.huggingface.co/hf-inference/models"
 
 # =====================================================
-# Helper detection functions
+# HF API CALL
 # =====================================================
 
-def detect_emotional_tone(sentence):
-    result = get_sentiment_model()(sentence)[0]
-    return result["label"], result["score"]
+def hf_inference(model_name: str, payload: dict) -> Any:
+    url = f"{HF_ROUTER_URL}/{model_name}"
 
-
-def detect_emotion(sentence):
-    result = get_emotion_model()(sentence)[0][0]
-    return result["label"], result["score"]
-
-
-def detect_toxicity(sentence):
-    result = get_toxicity_model()(sentence)[0]
-    return result["label"], result["score"]
-
-
-def detect_political_bias(sentence):
-    result = get_political_model()(
-        sentence,
-        candidate_labels=["left-leaning", "right-leaning", "neutral"]
+    response = requests.post(
+        url,
+        headers=HEADERS,
+        json=payload,
+        timeout=60
     )
-    return result["labels"][0], result["scores"][0]
 
+    if response.status_code != 200:
+        raise Exception(
+            f"HF API error ({model_name}): {response.status_code} {response.text}"
+        )
 
-def detect_subjectivity(sentence):
-    result = get_subjectivity_model()(sentence)[0]
-    return result["label"], result["score"]
+    return response.json()
 
 
 # =====================================================
-# MAIN ANALYSIS FUNCTION
+# HF OUTPUT NORMALIZER (VERY IMPORTANT)
 # =====================================================
 
-def analyze_bias(sentences):
+def get_top_label(result):
     """
-    Input: List of cleaned sentences
-    Output: Bias analysis report
+    Handles ALL HF formats:
+    - list[{label, score}]
+    - list[list[{label, score}]]
+    - {labels:[], scores:[]}
     """
 
-    emotional_levels = []
-    manipulative_flags = []
-    political_bias_results = []
+    if isinstance(result, dict):
+        return result["labels"][0], float(result["scores"][0])
+
+    if isinstance(result, list):
+        while isinstance(result, list) and len(result) > 0 and isinstance(result[0], list):
+            result = result[0]
+
+        if isinstance(result, list) and isinstance(result[0], dict):
+            top = max(result, key=lambda x: x.get("score", 0))
+            return top.get("label", "unknown"), float(top.get("score", 0))
+
+    raise ValueError(f"Unexpected HF response format: {result}")
+
+
+# =====================================================
+# RULE-BASED PREFILTER (SPEED BOOST 🚀)
+# =====================================================
+
+IMPORTANT_KEYWORDS = {
+    "should", "must", "never", "always", "truth", "lie", "fake",
+    "government", "media", "people", "danger", "fear", "hate",
+    "agenda", "propaganda", "corrupt", "exposed"
+}
+
+def is_candidate_sentence(sentence: str) -> bool:
+    words = set(sentence.split())
+    if len(words) < 6:
+        return False
+    return not words.isdisjoint(IMPORTANT_KEYWORDS)
+
+
+# =====================================================
+# OPTIMIZED DETECTION FUNCTIONS
+# =====================================================
+
+def detect_emotion_and_manipulation(sentence: str) -> Tuple[str, float]:
+    """
+    Single model replaces:
+    - sentiment
+    - emotion
+    - partial toxicity
+    """
+    result = hf_inference(
+        "j-hartmann/emotion-english-distilroberta-base",
+        {"inputs": sentence}
+    )
+    return get_top_label(result)
+
+
+def detect_bias_and_subjectivity(sentence: str) -> Tuple[str, float]:
+    """
+    Single MNLI call replaces:
+    - political bias
+    - subjectivity
+    """
+    result = hf_inference(
+        "facebook/bart-large-mnli",
+        {
+            "inputs": sentence,
+            "parameters": {
+                "candidate_labels": [
+                    "left-leaning political opinion",
+                    "right-leaning political opinion",
+                    "neutral factual statement",
+                    "subjective opinion"
+                ]
+            }
+        }
+    )
+    return get_top_label(result)
+
+
+# =====================================================
+# MAIN ANALYSIS FUNCTION (OPTIMIZED ⚡)
+# =====================================================
+
+def analyze_bias(sentences: List[str]) -> dict:
+
+    emotional_flags = 0
+    manipulative_sentences = []
+    political_biases = []
     opinion_sentences = []
 
     for sentence in sentences:
 
-        # -------- Emotional Tone --------
-        emo_label, emo_score = detect_emotional_tone(sentence)
-        if emo_score > 0.85:
-            emotional_levels.append(emo_label)
+        # ---------- FAST RULE FILTER ----------
+        if not is_candidate_sentence(sentence):
+            continue
 
-        # -------- Emotion Manipulation --------
-        emotion_label, emotion_score = detect_emotion(sentence)
-        if emotion_label in ["anger", "fear", "disgust"] and emotion_score > 0.75:
-            manipulative_flags.append(sentence)
+        try:
+            # ---------- EMOTION + MANIPULATION ----------
+            emotion_label, emotion_score = detect_emotion_and_manipulation(sentence)
 
-        # -------- Toxicity --------
-        toxic_label, toxic_score = detect_toxicity(sentence)
-        if toxic_label == "toxic" and toxic_score > 0.80:
-            manipulative_flags.append(sentence)
+            if emotion_label in {"anger", "fear", "disgust"} and emotion_score > 0.75:
+                manipulative_sentences.append(sentence)
 
-        # -------- Political Bias --------
-        pol_label, pol_score = detect_political_bias(sentence)
-        if pol_label != "neutral" and pol_score > 0.75:
-            political_bias_results.append(pol_label)
+            if emotion_score > 0.85:
+                emotional_flags += 1
 
-        # -------- Subjectivity --------
-        subj_label, subj_score = detect_subjectivity(sentence)
-        if subj_label == "SUBJECTIVE" and subj_score > 0.75:
-            opinion_sentences.append(sentence)
+            # ---------- BIAS + SUBJECTIVITY ----------
+            bias_label, bias_score = detect_bias_and_subjectivity(sentence)
+
+            if "left-leaning" in bias_label or "right-leaning" in bias_label:
+                if bias_score > 0.75:
+                    political_biases.append(bias_label)
+
+            if "subjective" in bias_label and bias_score > 0.75:
+                opinion_sentences.append(sentence)
+
+        except Exception as e:
+            print(f"[WARN] Bias skipped: {e}")
 
     # =================================================
     # FINAL AGGREGATION
     # =================================================
 
-    emotional_tone = most_common(emotional_levels)
-    political_bias = most_common(political_bias_results)
+    political_bias = most_common(political_biases)
 
     bias_score = calculate_bias_score(
-        emotional_flags=len(emotional_levels),
-        manipulative=len(manipulative_flags),
-        political=len(political_bias_results),
+        emotional_flags=emotional_flags,
+        manipulative=len(manipulative_sentences),
+        political=len(political_biases),
         opinions=len(opinion_sentences)
     )
 
     return {
-        "emotional_tone": emotional_tone or "neutral",
-        "manipulative_language": len(manipulative_flags) > 0,
+        "emotional_tone": "emotional" if emotional_flags > 0 else "neutral",
+        "manipulative_language": len(manipulative_sentences) > 0,
         "political_bias": political_bias or "neutral",
         "opinion_disguised_as_fact": opinion_sentences[:5],
         "bias_score": bias_score
@@ -157,16 +188,21 @@ def analyze_bias(sentences):
 
 
 # =====================================================
-# Utility functions
+# UTILITIES
 # =====================================================
 
-def most_common(items):
+def most_common(items: List[str]):
     if not items:
         return None
-    return max(set(items), key=items.count)
+    return Counter(items).most_common(1)[0][0]
 
 
-def calculate_bias_score(emotional_flags, manipulative, political, opinions):
+def calculate_bias_score(
+    emotional_flags: int,
+    manipulative: int,
+    political: int,
+    opinions: int
+) -> int:
     score = 0
     score += emotional_flags * 5
     score += manipulative * 10
